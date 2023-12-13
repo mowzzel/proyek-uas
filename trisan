@@ -1,0 +1,189 @@
+<?php
+include_once('C:\xampp\htdocs\uas\proyek-uas-main\simplehtmldom_1_9_1\simple_html_dom.php');
+echo '<link rel="stylesheet" href="style-sheet.css">';
+error_reporting(E_ERROR | E_PARSE);
+set_time_limit(300);
+
+function calculateEuclideanDistance($number1, $number2) {
+    $sum = 0;
+    foreach ($number1 as $key => $value) {
+        $sum += pow($value - $number2[$key], 2);
+    }
+    return sqrt($sum);
+}
+
+function calculateCosineSimilarity($number1, $number2) {
+    $numerator = 0;
+    $denom_wkq = 0;
+    $denom_wkj = 0;
+
+    foreach ($number1 as $key => $value) {
+        $numerator += $value * $number2[$key];
+        $denom_wkq += pow($value, 2);
+        $denom_wkj += pow($number2[$key], 2);
+    }
+
+    $denom_wkq = sqrt($denom_wkq);
+    $denom_wkj = sqrt($denom_wkj);
+
+    if ($denom_wkq == 0 || $denom_wkj == 0) {
+        return 0;
+    }
+
+    return $numerator / ($denom_wkq * $denom_wkj);
+}
+
+function generateQueryExpansions($searchTerm) {
+    $expansionTerms = array(
+        "applications",
+        "algorithms",
+        "image processing",
+        "machine learning",
+        "pattern recognition",
+        "deep learning",
+        "image analysis",
+        "computer graphics",
+        "object detection",
+        "augmented reality",
+        "virtual reality"
+    );
+
+    shuffle($expansionTerms);
+    $expandedQueries = array_merge(array($searchTerm), $expansionTerms);
+
+    return $expandedQueries;
+}
+
+function calculateSimilarityScore($method, $number1, $number2) {
+    if ($method == "euclidean") {
+        return calculateEuclideanDistance($number1, $number2);
+    } elseif ($method == "cosine") {
+        return calculateCosineSimilarity($number1, $number2);
+    } else {
+        return 0;
+    }
+}
+
+$queryExpansions = generateQueryExpansions("computer vision");
+
+if (isset($_GET['query'])) {
+    $searchTerm = $_GET['query'];
+} elseif (isset($_GET['expansion'])) {
+    $searchTerm = $_GET['expansion'];
+} else {
+    $searchTerm = "computer vision";
+}
+
+if (isset($_GET['similarityMethod'])) {
+    $similarityMethod = $_GET['similarityMethod'];
+} else {
+    $similarityMethod = "euclidean";
+}
+
+$html = file_get_html("https://scholar.google.com/scholar?hl=en&as_sdt=0%2C5&q=" . urlencode($queryExpansions[0]) . "&oq=");
+$datas = $html->find('div[class="gs_r gs_or gs_scl"]');
+
+$journals = array();
+
+foreach ($datas as $journal) {
+    $journal_title = $journal->find('h3', 0)->find('a', 0)->plaintext;
+    $journal_authors = $journal->find('div[class="gs_a"]', 0)->plaintext;
+    $journal_authors = explode("-", $journal_authors)[0];
+    $journal_link = $journal->find('h3', 0)->find('a', 0)->href;
+    $citation_count = $journal->find('div[class="gs_fl gs_flb"]', 0)->find('a', 2)->innertext;
+    $citation_count = preg_replace("/[^0-9]/", '', $citation_count);
+
+    $sampleNumber = array(10, 20, 30);
+    $journalNumber = array($citation_count, 0, 0);
+
+    $similarityScore = calculateSimilarityScore($similarityMethod, $sampleNumber, $journalNumber);
+
+    $details = array(
+        'Authors' => $journal_authors,
+        'link' => $journal_link,
+        'Abstract' => "Abstract cannot be located",
+        'Number of Citation' => $citation_count,
+        'Similarity Score' => $similarityScore
+    );
+
+    $journals[$journal_title] = $details;
+}
+
+$connection = mysqli_connect("localhost", "root", "", "news");
+
+echo "<div style='float: left; width: 20%; margin-right: 20px;'>";
+echo "Query Expansions:<br>";
+foreach ($queryExpansions as $expansion) {
+    echo "<a href='?expansion=$expansion'>$expansion</a><br>";
+}
+
+echo "<form method='get'>";
+echo "<br><br>";
+echo "Similarity Method:<br>";
+echo "<input type='radio' name='similarityMethod' value='euclidean' " . ($similarityMethod == 'euclidean' ? 'checked' : '') . "> Euclidean Distance<br>";
+echo "<input type='radio' name='similarityMethod' value='cosine' " . ($similarityMethod == 'cosine' ? 'checked' : '') . "> Cosine Similarity<br>";
+echo "<br>";
+echo "<input type='submit' value='Apply Similarity'>";
+echo "</form>";
+
+echo "</div>";
+
+echo "<div style='float: left; width: 70%;'>";
+foreach ($journals as $key => $journal) {
+    $link = $journal['link'];
+
+    $opts = array(
+        'http' => array(
+            'method' => "GET",
+            'header' => "Accept-language: en\r\n" .
+                "User-Agent:    Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36\r\n" .
+                "Cookie: foo=bar\r\n"
+        )
+    );
+    $context = stream_context_create($opts);
+
+    $content = file_get_html($link, false, $context);
+
+    if (!$content)
+        continue;
+
+    $index = 0;
+    $paragraphs = $content->find('p');
+
+    do {
+        $paragraph = $paragraphs[$index]->plaintext;
+        $word_count = str_word_count($paragraph);
+
+        $is_abstract = ($word_count > 50 && $word_count <= 300);
+        $paragraph_counter = ($index < count($paragraphs));
+
+        $index++;
+    } while (!$is_abstract && $paragraph_counter);
+
+    if ($is_abstract)
+        $journals[$key]['Abstract'] = strip_tags($paragraph);
+}
+
+foreach ($journals as $title => $details) {
+    echo "Title : $title<br>";
+
+    $authors = $details['Authors'];
+    $abstract = $details['Abstract'];
+    $citation_count = $details['Number of Citation'];
+    $similarityScore = $details['Similarity Score'];
+
+    foreach ($details as $key => $value) {
+        if ($key != "link" && $key != "Abstract" && $key != "Similarity Score") echo "$key : <br>$value <br>";
+        elseif ($key == "Abstract") echo "Abstract :<br><p style='text-align: justify; text-justify: inter-word;'>$value</p>";
+        elseif ($key == "Similarity Score") echo "Similarity Score :<br>$value<br>";
+
+        if ($key == "Abstract") echo "-----------------------------------------<br>";
+        if ($key == "Number of Citation") echo "<br><hr class='solid'>";
+    }
+
+    $sql = "INSERT INTO journals VALUES ('$title',$citation_count,'$authors', '$abstract')";
+    mysqli_query($connection, $sql);
+}
+echo "</div>";
+?>
+a
